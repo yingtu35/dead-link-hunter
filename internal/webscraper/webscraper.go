@@ -13,9 +13,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-var visitedChBuffer = 100  // buffer channel size for visitedCh
-var deadLinkChBuffer = 100 // buffer channel size for deadLinkCh
-
 var maxConcurrency = 20 // maximum number of concurrent requests
 
 type DeadLinkMsg struct {
@@ -36,12 +33,10 @@ type DeadLinkHunter struct {
 	visitedPages       map[string]bool  // A map to keep track of visited pages
 	pagesWithDeadLinks map[string]*Page // A map to keep track of pages with dead links
 
-	semaphore  chan struct{}    // A semaphore to limit the number of concurrent requests
-	visitedCh  chan string      // A channel to keep track of visited pages
-	deadLinkCh chan DeadLinkMsg // A channel to keep track of dead links
-	doneCh     chan struct{}    // A channel to signal the hunting is done
+	semaphore chan struct{} // A semaphore to limit the number of concurrent requests
 
 	visitedMu sync.RWMutex // A mutex to protect visitedPages
+	pageMu    sync.Mutex   // A mutex to protect pagesWithDeadLinks
 }
 
 func NewDeadLinkHunter(url string) *DeadLinkHunter {
@@ -58,11 +53,9 @@ func NewDeadLinkHunter(url string) *DeadLinkHunter {
 	}
 
 	semaphore := make(chan struct{}, maxConcurrency)
-	visitedCh := make(chan string, visitedChBuffer)
-	deadLinkCh := make(chan DeadLinkMsg, deadLinkChBuffer)
-	doneCh := make(chan struct{})
 
 	visitedMu := sync.RWMutex{}
+	pageMu := sync.Mutex{}
 	return &DeadLinkHunter{
 		client:             client,
 		url:                url,
@@ -71,29 +64,18 @@ func NewDeadLinkHunter(url string) *DeadLinkHunter {
 		visitedPages:       make(map[string]bool),
 		pagesWithDeadLinks: make(map[string]*Page),
 		semaphore:          semaphore,
-		visitedCh:          visitedCh,
-		deadLinkCh:         deadLinkCh,
-		doneCh:             doneCh,
 		visitedMu:          visitedMu,
+		pageMu:             pageMu,
 	}
 }
 
 func (d *DeadLinkHunter) StartHunting() {
 	var wg sync.WaitGroup
 
-	go func() {
-		d.processMessages(&wg)
-		close(d.doneCh)
-	}()
-
 	wg.Add(1)
 	go d.hunt("", d.url, &wg)
 
 	wg.Wait()
-
-	close(d.visitedCh)
-	close(d.deadLinkCh)
-	<-d.doneCh
 }
 
 func (d *DeadLinkHunter) hunt(parentUrl, url string, wg *sync.WaitGroup) {
@@ -119,7 +101,9 @@ func (d *DeadLinkHunter) hunt(parentUrl, url string, wg *sync.WaitGroup) {
 	}
 
 	// Mark the page as visited
-	d.visitedCh <- url
+	d.visitedMu.Lock()
+	d.visitedPages[url] = true
+	d.visitedMu.Unlock()
 
 	log.Printf("fetching page %s", url)
 	res, err := d.client.Get(url)
@@ -131,7 +115,9 @@ func (d *DeadLinkHunter) hunt(parentUrl, url string, wg *sync.WaitGroup) {
 
 	if res.StatusCode > 299 {
 		// * Dead link found, add it to the pagesWithDeadLinks map
-		d.deadLinkCh <- DeadLinkMsg{parentUrl, url}
+		d.pageMu.Lock()
+		d.addDeadLink(DeadLinkMsg{parentUrl, url})
+		d.pageMu.Unlock()
 		return
 	}
 
@@ -144,32 +130,6 @@ func (d *DeadLinkHunter) hunt(parentUrl, url string, wg *sync.WaitGroup) {
 	for _, link := range links {
 		wg.Add(1)
 		go d.hunt(url, link, wg)
-	}
-}
-
-func (d *DeadLinkHunter) processMessages(wg *sync.WaitGroup) {
-	for {
-		select {
-		case url, ok := <-d.visitedCh:
-			if !ok {
-				d.visitedCh = nil
-			} else {
-				d.visitedMu.Lock()
-				d.visitedPages[url] = true
-				d.visitedMu.Unlock()
-			}
-		case deadLink, ok := <-d.deadLinkCh:
-			if !ok {
-				d.deadLinkCh = nil
-			} else {
-				d.addDeadLink(deadLink)
-			}
-		}
-
-		// Check if both channels are closed
-		if d.visitedCh == nil && d.deadLinkCh == nil {
-			return
-		}
 	}
 }
 
