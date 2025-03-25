@@ -13,6 +13,8 @@ func main() {
 	log.SetFlags(0)
 
 	url := flag.String("url", "https://scrape-me.dreamsofcode.io/", "URL to fetch")
+	static := flag.Bool("static", false, "Enable static scraping")
+
 	flag.Parse()
 
 	if *url == "" {
@@ -21,7 +23,12 @@ func main() {
 	}
 
 	// Get all dead links
-	dlh := webscraper.NewDeadLinkHunter(*url)
+	var dlh webscraper.WebScraper
+	if *static {
+		dlh = webscraper.NewStaticHunter(*url)
+	} else {
+		dlh = webscraper.NewDynamicHunter(*url)
+	}
 	start := time.Now()
 	dlh.StartHunting()
 	elapsed := time.Since(start)

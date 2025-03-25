@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+var extensions = []string{".pdf", ".jpg", ".jpeg", ".png", ".gif", ".doc", ".docx",
+	".xls", ".xlsx", ".zip", ".rar", ".exe", ".dmg", ".iso"}
+
 // GetProtocol returns the protocol of a given URL
 func GetProtocol(u string) (string, error) {
 	parsedUrl, err := url.Parse(u)
@@ -48,4 +51,13 @@ func GetDomain(u string) (string, error) {
 func IsSameDomain(domain string, u string) bool {
 	d, err := GetDomain(u)
 	return err == nil && domain == d
+}
+
+func IsBinaryFileUrl(url string) bool {
+	for _, ext := range extensions {
+		if strings.HasSuffix(strings.ToLower(url), ext) {
+			return true
+		}
+	}
+	return false
 }
