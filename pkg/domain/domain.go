@@ -16,6 +16,7 @@ func GetProtocol(u string) (string, error) {
 }
 
 // GetDomain returns the domain of a given URL
+// Refers to https://stackoverflow.com/questions/67650694/how-do-i-retrieve-the-domain-from-a-url
 func GetDomain(u string) (string, error) {
 	var hostname string
 	var temp []string

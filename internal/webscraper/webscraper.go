@@ -222,7 +222,7 @@ func (d *DeadLinkHunter) getAllLinks(body io.Reader) ([]string, error) {
 }
 
 func (d *DeadLinkHunter) constructURL(url string) (string, error) {
-	// if empty string, return empty string
+	// if empty string, return error
 	if url == "" {
 		return "", errors.New("empty string")
 	}
