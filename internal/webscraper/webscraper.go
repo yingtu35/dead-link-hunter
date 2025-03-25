@@ -11,6 +11,7 @@ import (
 	"github.com/rodaine/table"
 	"github.com/yingtu35/dead-link-hunter/pkg/domain"
 	"golang.org/x/net/html"
+	"golang.org/x/sync/singleflight"
 )
 
 var maxConcurrency = 20 // maximum number of concurrent requests
@@ -31,12 +32,15 @@ type DeadLinkHunter struct {
 	protocol           string           // The protocol of the URL
 	domain             string           // The domain of the URL
 	visitedPages       map[string]bool  // A map to keep track of visited pages
+	deadUrls           map[string]bool  // A map to keep track of dead URLs
 	pagesWithDeadLinks map[string]*Page // A map to keep track of pages with dead links
 
 	semaphore chan struct{} // A semaphore to limit the number of concurrent requests
 
-	visitedMu sync.RWMutex // A mutex to protect visitedPages
-	pageMu    sync.Mutex   // A mutex to protect pagesWithDeadLinks
+	visitedMu sync.Mutex // A mutex to protect visitedPages and deadUrls
+	pageMu    sync.Mutex // A mutex to protect pagesWithDeadLinks
+
+	flightGroup singleflight.Group // A singleflight group to avoid duplicate requests
 }
 
 func NewDeadLinkHunter(url string) *DeadLinkHunter {
@@ -54,18 +58,15 @@ func NewDeadLinkHunter(url string) *DeadLinkHunter {
 
 	semaphore := make(chan struct{}, maxConcurrency)
 
-	visitedMu := sync.RWMutex{}
-	pageMu := sync.Mutex{}
 	return &DeadLinkHunter{
 		client:             client,
 		url:                url,
 		protocol:           protocol,
 		domain:             domain,
 		visitedPages:       make(map[string]bool),
+		deadUrls:           make(map[string]bool),
 		pagesWithDeadLinks: make(map[string]*Page),
 		semaphore:          semaphore,
-		visitedMu:          visitedMu,
-		pageMu:             pageMu,
 	}
 }
 
@@ -73,64 +74,100 @@ func (d *DeadLinkHunter) StartHunting() {
 	var wg sync.WaitGroup
 
 	wg.Add(1)
-	go d.hunt("", d.url, &wg)
+	go func() {
+		defer wg.Done()
+
+		// Use singleflight for the initial URL too
+		val, err, _ := d.flightGroup.Do(d.url, func() (interface{}, error) {
+			return d.hunt(d.url, &wg)
+		})
+
+		if err != nil {
+			log.Printf("Error hunting starting URL %s: %v", d.url, err)
+			return
+		}
+
+		// Handle the result if needed
+		_, ok := val.(bool)
+		if !ok {
+			log.Printf("Error type assertion for starting URL %s", d.url)
+			return
+		}
+
+	}()
 
 	wg.Wait()
 }
 
-func (d *DeadLinkHunter) hunt(parentUrl, url string, wg *sync.WaitGroup) {
-	// Decrement the wait group counter when the function returns
-	defer wg.Done()
-
+func (d *DeadLinkHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
 	// Acquire the semaphore
 	d.semaphore <- struct{}{}
 	defer func() {
 		<-d.semaphore
 	}()
 
-	// Check if the page has been visited
-	d.visitedMu.RLock()
-	if d.visitedPages[url] {
-		d.visitedMu.RUnlock()
-		return
-	}
-	d.visitedMu.RUnlock()
-
-	if !domain.IsSameDomain(d.domain, url) {
-		return
-	}
-
-	// Mark the page as visited
+	// Check if the URL has already been visited
 	d.visitedMu.Lock()
+	if d.visitedPages[url] {
+		isDead := d.deadUrls[url]
+		d.visitedMu.Unlock()
+		return isDead, nil
+	}
 	d.visitedPages[url] = true
 	d.visitedMu.Unlock()
+
+	if !domain.IsSameDomain(d.domain, url) {
+		return false, nil
+	}
 
 	log.Printf("fetching page %s", url)
 	res, err := d.client.Get(url)
 	if err != nil {
 		log.Printf("Error fetching %s: %v", url, err)
-		return
+		return false, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode > 299 {
-		// * Dead link found, add it to the pagesWithDeadLinks map
-		d.pageMu.Lock()
-		d.addDeadLink(DeadLinkMsg{parentUrl, url})
-		d.pageMu.Unlock()
-		return
+		d.visitedMu.Lock()
+		d.deadUrls[url] = true
+		d.visitedMu.Unlock()
+		return true, nil
 	}
 
 	links, err := d.getAllLinks(res.Body)
 	if err != nil {
 		log.Printf("Error parsing links from %s: %v", url, err)
-		return
+		return false, err
 	}
 
 	for _, link := range links {
 		wg.Add(1)
-		go d.hunt(url, link, wg)
+		go func(link string) {
+			// Decrement the wait group counter when the function returns
+			defer wg.Done()
+
+			val, err, _ := d.flightGroup.Do(link, func() (interface{}, error) {
+				return d.hunt(link, wg)
+			})
+			if err != nil {
+				log.Printf("Error hunting %s: %v", link, err)
+				return
+			}
+			isDead, ok := val.(bool)
+			if !ok {
+				log.Printf("Error type assertion %s", link)
+				return
+			}
+			if isDead {
+				// * Dead link found, add it to the pagesWithDeadLinks map
+				d.pageMu.Lock()
+				d.addDeadLink(DeadLinkMsg{url, link})
+				d.pageMu.Unlock()
+			}
+		}(link)
 	}
+	return false, nil
 }
 
 func (d *DeadLinkHunter) addDeadLink(deadlink DeadLinkMsg) {

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"time"
 
 	"github.com/yingtu35/dead-link-hunter/internal/webscraper"
 )
@@ -21,7 +22,10 @@ func main() {
 
 	// Get all dead links
 	dlh := webscraper.NewDeadLinkHunter(*url)
+	start := time.Now()
 	dlh.StartHunting()
+	elapsed := time.Since(start)
 
 	dlh.PrintResults()
+	log.Printf("Total Hunting Time: %s", elapsed)
 }
