@@ -89,6 +89,10 @@ func (d *StaticHunter) StartHunting() {
 	wg.Wait()
 }
 
+func (d *StaticHunter) GetResults() *map[string]*Page {
+	return &d.pagesWithDeadLinks
+}
+
 func (d *StaticHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
 	// Acquire the semaphore
 	d.semaphore <- struct{}{}
@@ -182,12 +186,12 @@ func (d *StaticHunter) addDeadLink(deadlink DeadLinkMsg) {
 	url := deadlink.url
 	if _, ok := d.pagesWithDeadLinks[parentUrl]; parentUrl != "" && !ok {
 		d.pagesWithDeadLinks[parentUrl] = &Page{
-			deadLinkCount: 0,
-			deadLinks:     []string{},
+			DeadLinkCount: 0,
+			DeadLinks:     []string{},
 		}
 	}
-	d.pagesWithDeadLinks[parentUrl].deadLinkCount++
-	d.pagesWithDeadLinks[parentUrl].deadLinks = append(d.pagesWithDeadLinks[parentUrl].deadLinks, url)
+	d.pagesWithDeadLinks[parentUrl].DeadLinkCount++
+	d.pagesWithDeadLinks[parentUrl].DeadLinks = append(d.pagesWithDeadLinks[parentUrl].DeadLinks, url)
 }
 
 func (d *StaticHunter) PrintResults() {
@@ -199,9 +203,9 @@ func (d *StaticHunter) PrintResults() {
 
 	tbl := table.New("Page", "Counts", "Dead Links")
 	for url, page := range d.pagesWithDeadLinks {
-		for i, deadLink := range page.deadLinks {
+		for i, deadLink := range page.DeadLinks {
 			if i == 0 {
-				tbl.AddRow(url, page.deadLinkCount, deadLink)
+				tbl.AddRow(url, page.DeadLinkCount, deadLink)
 			} else {
 				tbl.AddRow("", "", deadLink)
 			}

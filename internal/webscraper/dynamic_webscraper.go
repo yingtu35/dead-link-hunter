@@ -116,6 +116,10 @@ func (dh *DynamicHunter) StartHunting() {
 	dh.close()
 }
 
+func (dh *DynamicHunter) GetResults() *map[string]*Page {
+	return &dh.pagesWithDeadLinks
+}
+
 func (dh *DynamicHunter) PrintResults() {
 	log.Println()
 	if len(dh.pagesWithDeadLinks) == 0 {
@@ -124,9 +128,9 @@ func (dh *DynamicHunter) PrintResults() {
 	}
 	tbl := table.New("Page", "Counts", "Dead Links")
 	for url, page := range dh.pagesWithDeadLinks {
-		for i, deadLink := range page.deadLinks {
+		for i, deadLink := range page.DeadLinks {
 			if i == 0 {
-				tbl.AddRow(url, page.deadLinkCount, deadLink)
+				tbl.AddRow(url, page.DeadLinkCount, deadLink)
 			} else {
 				tbl.AddRow("", "", deadLink)
 			}
@@ -255,12 +259,12 @@ func (dh *DynamicHunter) addDeadLink(deadlink DeadLinkMsg) {
 	url := deadlink.url
 	if _, ok := dh.pagesWithDeadLinks[parentUrl]; parentUrl != "" && !ok {
 		dh.pagesWithDeadLinks[parentUrl] = &Page{
-			deadLinkCount: 0,
-			deadLinks:     []string{},
+			DeadLinkCount: 0,
+			DeadLinks:     []string{},
 		}
 	}
-	dh.pagesWithDeadLinks[parentUrl].deadLinkCount++
-	dh.pagesWithDeadLinks[parentUrl].deadLinks = append(dh.pagesWithDeadLinks[parentUrl].deadLinks, url)
+	dh.pagesWithDeadLinks[parentUrl].DeadLinkCount++
+	dh.pagesWithDeadLinks[parentUrl].DeadLinks = append(dh.pagesWithDeadLinks[parentUrl].DeadLinks, url)
 }
 
 func (dh *DynamicHunter) constructURL(url string) (string, error) {
