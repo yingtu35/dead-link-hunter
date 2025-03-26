@@ -18,6 +18,9 @@ func main() {
 	static := flag.Bool("static", false, "Enable static scraping")
 	exportType := flag.String("export", "", "Export file format (csv, json)")
 	filename := flag.String("filename", "result", "Export file name")
+	maxDepth := flag.Int("maxDepth", webscraper.MaxDepth, "Max depth to scrape")
+	maxConcurrency := flag.Int("maxConcurrency", webscraper.MaxConcurrency, "Max concurrency")
+	timeout := flag.Int("timeout", webscraper.DefaultTimeout, "Timeout for each request")
 
 	flag.Parse()
 
@@ -33,6 +36,14 @@ func main() {
 	} else {
 		dlh = webscraper.NewDynamicHunter(*url)
 	}
+
+	var options = &webscraper.ScraperOptions{
+		MaxDepth:       *maxDepth,
+		MaxConcurrency: *maxConcurrency,
+		Timeout:        *timeout,
+	}
+	dlh.SetHunterOptions(options)
+
 	start := time.Now()
 	dlh.StartHunting()
 	elapsed := time.Since(start)

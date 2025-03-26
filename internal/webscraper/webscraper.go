@@ -10,7 +10,16 @@ type Page struct {
 	DeadLinks     []string
 }
 
+type ScraperOptions struct {
+	MaxDepth       int
+	MaxConcurrency int
+	Timeout        int
+}
+
 type WebScraper interface {
+	// SetHunterOptions sets the options for the hunter
+	SetHunterOptions(options *ScraperOptions)
+
 	// StartHunting starts the hunting process
 	StartHunting()
 

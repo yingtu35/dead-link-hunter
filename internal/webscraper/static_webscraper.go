@@ -16,6 +16,7 @@ import (
 )
 
 type StaticHunter struct {
+	scraperOptions     *ScraperOptions  // The scraper options to use
 	client             *http.Client     // The HTTP client to use
 	url                string           // The URL to start the hunting
 	protocol           string           // The protocol of the URL
@@ -46,9 +47,10 @@ func NewStaticHunter(url string) WebScraper {
 		Timeout: DefaultTimeout * time.Second,
 	}
 
-	semaphore := make(chan struct{}, maxConcurrency)
+	semaphore := make(chan struct{})
 
 	return &StaticHunter{
+		scraperOptions:     &ScraperOptions{MaxDepth: MaxDepth, MaxConcurrency: MaxConcurrency, Timeout: DefaultTimeout},
 		client:             client,
 		url:                url,
 		protocol:           protocol,
@@ -60,6 +62,12 @@ func NewStaticHunter(url string) WebScraper {
 	}
 }
 
+func (d *StaticHunter) SetHunterOptions(options *ScraperOptions) {
+	d.scraperOptions = options
+	d.semaphore = make(chan struct{}, d.scraperOptions.MaxConcurrency)
+	d.client.Timeout = time.Duration(d.scraperOptions.Timeout) * time.Second
+}
+
 func (d *StaticHunter) StartHunting() {
 	var wg sync.WaitGroup
 
@@ -69,7 +77,7 @@ func (d *StaticHunter) StartHunting() {
 
 		// Use singleflight for the initial URL too
 		val, err, _ := d.flightGroup.Do(d.url, func() (interface{}, error) {
-			return d.hunt(d.url, &wg)
+			return d.hunt(d.url, &wg, 0)
 		})
 
 		if err != nil {
@@ -93,7 +101,7 @@ func (d *StaticHunter) GetResults() *map[string]*Page {
 	return &d.pagesWithDeadLinks
 }
 
-func (d *StaticHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
+func (d *StaticHunter) hunt(url string, wg *sync.WaitGroup, curDepth int) (bool, error) {
 	// Acquire the semaphore
 	d.semaphore <- struct{}{}
 	defer func() {
@@ -146,6 +154,11 @@ func (d *StaticHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
 		return true, nil
 	}
 
+	// Check if the current depth is greater than the maximum depth
+	if curDepth >= d.scraperOptions.MaxDepth {
+		return false, nil
+	}
+
 	links, err := d.getAllLinks(res.Body)
 	if err != nil {
 		log.Printf("Error parsing links from %s: %v", url, err)
@@ -159,7 +172,7 @@ func (d *StaticHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
 			defer wg.Done()
 
 			val, err, _ := d.flightGroup.Do(link, func() (interface{}, error) {
-				return d.hunt(link, wg)
+				return d.hunt(link, wg, curDepth+1)
 			})
 			if err != nil {
 				log.Printf("Error hunting %s: %v", link, err)

@@ -15,6 +15,7 @@ import (
 )
 
 type DynamicHunter struct {
+	scraperOptions     *ScraperOptions        // The scraper options to use
 	pwClient           *playwright.Playwright // The Playwright client to use
 	browser            *playwright.Browser    // The Playwright browser to use
 	client             *http.Client           // The HTTP client to use
@@ -69,9 +70,10 @@ func NewDynamicHunter(url string) WebScraper {
 		Timeout: DefaultTimeout * time.Second,
 	}
 
-	semaphore := make(chan struct{}, maxConcurrency)
+	semaphore := make(chan struct{})
 
 	return &DynamicHunter{
+		scraperOptions:     &ScraperOptions{MaxDepth: MaxDepth, MaxConcurrency: MaxConcurrency, Timeout: DefaultTimeout},
 		pwClient:           pwClient,
 		browser:            browser,
 		client:             client,
@@ -85,6 +87,12 @@ func NewDynamicHunter(url string) WebScraper {
 	}
 }
 
+func (dh *DynamicHunter) SetHunterOptions(options *ScraperOptions) {
+	dh.scraperOptions = options
+	dh.semaphore = make(chan struct{}, dh.scraperOptions.MaxConcurrency)
+	dh.client.Timeout = time.Duration(dh.scraperOptions.Timeout) * time.Second
+}
+
 func (dh *DynamicHunter) StartHunting() {
 	var wg sync.WaitGroup
 
@@ -94,7 +102,7 @@ func (dh *DynamicHunter) StartHunting() {
 
 		// Use singleflight for the initial URL too
 		val, err, _ := dh.flightGroup.Do(dh.url, func() (interface{}, error) {
-			return dh.hunt(dh.url, &wg)
+			return dh.hunt(dh.url, &wg, 0)
 		})
 
 		if err != nil {
@@ -150,7 +158,7 @@ func (dh *DynamicHunter) close() {
 	}
 }
 
-func (dh *DynamicHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
+func (dh *DynamicHunter) hunt(url string, wg *sync.WaitGroup, curDepth int) (bool, error) {
 	dh.semaphore <- struct{}{}
 	defer func() {
 		<-dh.semaphore
@@ -213,6 +221,11 @@ func (dh *DynamicHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
 		return true, nil
 	}
 
+	// Check if the current depth is greater than the maximum depth
+	if curDepth >= dh.scraperOptions.MaxDepth {
+		return false, nil
+	}
+
 	links, err := page.Locator("a").All()
 	if err != nil {
 		return false, err
@@ -232,7 +245,7 @@ func (dh *DynamicHunter) hunt(url string, wg *sync.WaitGroup) (bool, error) {
 			defer wg.Done()
 
 			val, err, _ := dh.flightGroup.Do(linkURL, func() (interface{}, error) {
-				return dh.hunt(linkURL, wg)
+				return dh.hunt(linkURL, wg, curDepth+1)
 			})
 			if err != nil {
 				log.Printf("Error hunting %s: %v", linkURL, err)
